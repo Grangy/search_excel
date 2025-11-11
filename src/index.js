@@ -2,6 +2,7 @@
 require('dotenv').config();
 
 const crypto = require('crypto');
+const express = require('express');
 const fs = require('fs');
 const fsPromises = require('fs/promises');
 const path = require('path');
@@ -11,6 +12,9 @@ const Fuse = require('fuse.js');
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ACCESS_CODE = '22170313';
 const DATA_SECRET = process.env.DATA_SECRET;
+const USE_WEBHOOK = process.env.USE_WEBHOOK === 'true';
+const WEBHOOK_URL = process.env.WEBHOOK_URL;
+const PORT = Number(process.env.PORT) || 3000;
 
 if (!BOT_TOKEN) {
   console.error('BOT_TOKEN is not defined in the environment. Please add it to the .env file.');
@@ -284,7 +288,49 @@ async function bootstrap() {
   loadClients();
   scheduleDataReload();
 
-  const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+  const bot = new TelegramBot(BOT_TOKEN, { polling: !USE_WEBHOOK });
+
+  if (USE_WEBHOOK) {
+    if (!WEBHOOK_URL) {
+      console.error('WEBHOOK_URL environment variable is required when USE_WEBHOOK=true.');
+      process.exit(1);
+    }
+
+    await bot.deleteWebHook({ drop_pending_updates: true }).catch((error) => {
+      console.warn('Failed to delete previous webhook:', error.message);
+    });
+
+    const webhookEndpoint = new URL('/telegram/webhook', WEBHOOK_URL).toString();
+    await bot.setWebHook(webhookEndpoint).catch((error) => {
+      console.error('Failed to set webhook:', error.message);
+      process.exit(1);
+    });
+
+    const app = express();
+    app.use(express.json());
+
+    app.post('/telegram/webhook', (req, res) => {
+      bot.processUpdate(req.body);
+      res.sendStatus(200);
+    });
+
+    app.get('/health', (_req, res) => {
+      res.json({ status: 'ok' });
+    });
+
+    app.get('/', (_req, res) => {
+      res.send('Telegram bot webhook is running.');
+    });
+
+    app.listen(PORT, () => {
+      console.log(`HTTP server listening on port ${PORT} for Telegram webhooks.`);
+    });
+  } else {
+    await bot.deleteWebHook({ drop_pending_updates: true }).catch((error) => {
+      console.warn('Failed to delete webhook before polling:', error.message);
+    });
+    console.log('Running in polling mode.');
+  }
 
   bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id.toString();
@@ -335,7 +381,13 @@ async function bootstrap() {
     console.error('Polling error:', error.code, error.response?.body || error.message);
   });
 
-  console.log('Telegram bot is up and running.');
+  bot.on('webhook_error', (error) => {
+    console.error('Webhook error:', error.message);
+  });
+
+  console.log(
+    `Telegram bot is up and running in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`,
+  );
 }
 
 bootstrap().catch((error) => {

@@ -13,6 +13,7 @@
   "description": "",
   "dependencies": {
     "dotenv": "^17.2.3",
+    "express": "^5.1.0",
     "fuse.js": "^7.1.0",
     "node-telegram-bot-api": "^0.66.0",
     "xlsx": "^0.18.5"
